@@ -1,7 +1,7 @@
 all: server client
 server: server.c
-	gcc server.c -o server
+	gcc -g server.c -o server
 client: client.c
-	gcc client.c -o client -lpthread
+	gcc -g client.c -o client -lpthread
 clean:
 	rm server client

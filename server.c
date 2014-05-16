@@ -10,11 +10,12 @@
 #include <errno.h>
 #include <assert.h>
 #include <sys/epoll.h>
+#include <signal.h>
 
 #include "list.h"
+#include "chat.h"
 
 
-#define BUFSIZE 1024
 #define MAXCONN 20
 #define MAX_EVENTS MAXCONN
 #define LISTEN_QUEUE 20
@@ -96,7 +97,7 @@ int main(int argc, const char *argv[])
 		break;
 	}//end for
 
-	setnonblocking(listen_fd);
+	setReuseAddr(listen_fd);
 
 	if(p == NULL)
 	{
@@ -125,6 +126,8 @@ int main(int argc, const char *argv[])
 		nev = epoll_wait(epfd, events, MAX_EVENTS, -1);
 		if(nev < 0)
 		{
+			if(errno == EINTR)
+				continue;
 			free(events);
 			bail("epoll_wait");
 		}
@@ -150,71 +153,91 @@ int main(int argc, const char *argv[])
 
 int send_reply(struct sockfd_opt *p_so)
 {
-	char reqBuf[BUFSIZE];
+	char buf[BUFSIZE], bufmsg[BUFSIZE];
+	char *p;
 	int result;
 	struct sockaddr_in client_addr;
-	char *ip, *port;
+	struct user *pos, *n;
+	char *ip;
+	int port;
+	char uid[10];
 
 	//get cilent addr
 	socklen_t len = sizeof client_addr;
 	result = getpeername(p_so->fd, (struct sockaddr*)&client_addr, &len);
-	if (result != 0) {
-		perror("getpeername");
-		exit(1);
-	}
 	ip = inet_ntoa(client_addr.sin_addr);
-	port = (char*)malloc(8);
-	sprintf(port, "%d", ntohs(client_addr.sin_port));
-
-	if((result = read(p_so->fd, reqBuf, sizeof reqBuf)) <= 0)
+	port = ntohs(client_addr.sin_port);
+	if((result = recv(p_so->fd, buf, sizeof buf, 0)) <= 0)
 	{
 		//client close connection;
 		close(p_so->fd);
 		hlist_del(&p_so->hlist);
 		free(p_so);
 
-		/*
-		   struct user *pos, *n;
-		   list_for_each_entry_safe(pos, n, &ulist, list)
-		   if (!strcmp(pos->ip, ip) && !strcmp(pos->port, port)) {
-		   printf("goodbye %s\n", pos->name);
-		   list_del(&pos->list);
-		   }
-		   */
-
+		list_for_each_entry_safe(pos, n, &ulist, list)
+			if (!strcmp(pos->ip, ip) && pos->port == port) {
+				printf("goodbye %s\n", pos->uid);
+				free(pos->uid);
+				free(pos->ip);
+				list_del(&pos->list);
+			}
 		if(result<0 && errno != ECONNRESET)
-			bail("read()");
-
+			bail("recv()");
 		return 0;
 	} 
-	reqBuf[result] = '\0';
-	printf("%s", reqBuf);
-
-
-	//add to user list
-	//split string
-	struct user tmp;
-	tmp.name = reqBuf;
-	tmp.ip = ip; 
-	tmp.port = port;
-	printf("port %s\n", tmp.port);
-	list_add_tail(&tmp.list, &ulist);
-	struct user *t;
-	list_for_each_entry(t, &ulist, list)
-	{
-		printf("%s\n", t->name);
-		printf("what???\n");
+	if (!memcmp(HEART, buf, 3)) {
+		memset(buf, 0, sizeof buf);
+		int i = 0;
+		// 3 bytes for the online user;
+		p = &buf[4];
+		list_for_each_entry(pos, &ulist, list)
+		{
+			if (strcmp(pos->uid, buf)) {
+				//sprintf(p, "%s,%s,%s:", pos->uid, pos->ip, pos->port);
+				sprintf(p, "%s:", pos->uid);
+				p += strlen(p);
+				i++;
+			}
+			//printf("%s\n", pos->uid);
+			//printf("port: %s\n", pos->port);
+		}
+		memcpy(buf, &i, 4);
+		result = send(p_so->fd, buf, sizeof buf, 0);
+		if (result < 0) {
+			perror("send");
+		}
 	}
 
-	/*
-	else {
-		reqBuf[result] = '\0';
-		printf("reqBuf: %s\n", reqBuf);
-		result = write(p_so->fd, str, strlen(str));
-		if(result < 0)
-			bail("write()");
+	else if (!memcmp(LOGIN, buf, 3)) {
+		p = &buf[3];
+		buf[result] = '\0';
+		printf("%s login\n", p);
+
+		//add to user list
+		struct user *pTmp = (struct user*)malloc(sizeof(struct user));
+		pTmp->uid = strdup(p);
+		pTmp->ip = strdup(ip); 
+		pTmp->port = port;
+		pTmp->fd = p_so->fd;
+		list_add_tail(&pTmp->list, &ulist);
 	}
-	*/
+
+	else if (!memcmp(MESSAGE, buf, 3)) {
+		memcpy(uid, &buf[3], sizeof uid);
+		list_for_each_entry(pos, &ulist, list)
+		{
+			if (!strncmp(pos->uid, uid, sizeof uid)) {
+				break;
+			}
+		}
+		memcpy(bufmsg, MESSAGE, 3);
+		memcpy(&bufmsg[3], &buf[13], 10);
+		memcpy(&bufmsg[13], &buf[23], BUFSIZE - 23);
+		result = send(pos->fd, bufmsg, sizeof bufmsg, 0);
+		if (result < 0) {
+			perror("send");
+		}
+	}
 	return 0;
 }
 
@@ -229,8 +252,6 @@ int create_conn(struct sockfd_opt *p_so)
 	int ret;
 
 	sin_size = sizeof(struct sockaddr_in);
-
-	printf("create_conn ------------------\n");
 
 	if((conn_fd = accept(p_so->fd, (struct sockaddr*)&client_addr, &sin_size)) == -1)
 	{
@@ -265,7 +286,6 @@ int create_conn(struct sockfd_opt *p_so)
 		return -1;
 	}
 
-
 	return 0;
 }
 
@@ -276,8 +296,6 @@ int init(int fd)
 	struct epoll_event ev;
 	int ret;
 	unsigned int hash;
-
-	list_empty(&ulist);
 
 	//init hashtable
 	hlist_empty(&fd_hash[0]);

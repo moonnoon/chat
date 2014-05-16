@@ -310,9 +310,10 @@ for (pos = (head)->first;	  \
 //my define
 struct user
 {
-	char *name;
+	char *uid;
 	char *ip;
-	char *port;
+	int port;
+	int fd;
 	struct list_head list;
 };
 

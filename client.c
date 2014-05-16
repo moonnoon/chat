@@ -7,16 +7,78 @@
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
+#include <signal.h>
+#include <errno.h>
+#include <fcntl.h>
+#include "chat.h"
 
-#define MAXBUFLEN 1024
-#define SERV_PORT 8873
-#define SERVER_IP "192.168.0.1"
 #define LISTEN_QUEUE 5
 
 struct sockaddr_in local_addr;
-int sockfd;
 //int sockmsg;
-int local_port;
+
+static int		servfd;
+static int		nsec;			/* #seconds betweeen each alarm */
+static int		maxnprobes;		/* #probes w/no response before quit */
+static int		nprobes;		/* #probes since last server response */
+static void	sig_urg(int), sig_alrm(int);
+
+struct online
+{
+	char *uid;
+};
+static int nUser;
+
+struct online *user;
+
+//create user list
+int getUser(char *p)
+{
+	//printf("%s\n", p);
+	free(user);
+	int i;
+	char *tmp = &p[4];
+	memcpy(&nUser, p, 4);
+	user = (struct online*)malloc(sizeof(struct online)*nUser);
+	p = &p[4];
+	for (i = 0; i < nUser; i++) {
+		tmp = strsep(&p, ":");
+		user[i].uid = tmp;
+		printf("%s\n", tmp);
+	}
+	return 0;
+}
+
+void heartbeat_cli(int servfd_arg, int nsec_arg, int maxnprobes_arg)
+{
+	servfd = servfd_arg;		/* set globals for signal handlers */
+	if ( (nsec = nsec_arg) < 1)
+		nsec = 1;
+	if ( (maxnprobes = maxnprobes_arg) < nsec)
+		maxnprobes = nsec;
+	nprobes = 0;
+
+	fcntl(servfd, F_SETOWN, getpid());
+
+	signal(SIGALRM, sig_alrm);
+	alarm(nsec);
+}
+
+static void sig_alrm(int signo)
+{
+	int n;
+	if (++nprobes > maxnprobes) {
+		fprintf(stderr, "server is unreachable\n");
+		exit(0);
+	}
+	n = send(servfd, HEART, sizeof HEART, MSG_OOB);
+	if (n < 0) {
+		perror("send");
+		exit(0);
+	}
+	alarm(nsec);
+	return;					/* may interrupt client code */
+}
 
 
 void setReuseAddr(int sock)
@@ -28,24 +90,36 @@ void setReuseAddr(int sock)
 		perror("setsockopt");
 	}
 }
+
+/*
 void *recvMsg(void *arg)
 {
 	struct sockaddr_in listen_addr, talk_addr;
 	int ret = 1;
 	int sockmsg, new_fd;
-	char buf[MAXBUFLEN];
+	char buf[BUFSIZE];
+	socklen_t len;
 	socklen_t listen_len = sizeof listen_addr;
 	sockmsg = socket(AF_INET, SOCK_STREAM, 0);
-	if(sockmsg != 0) {
+	printf("0\n");
+	if(sockmsg < 0) {
 		perror("socket");
 		exit(1);
 	}
-	local_port = ntohs(local_addr.sin_port);
+	talk_addr.sin_port = ntohs(0);
 	talk_addr.sin_family = AF_INET;
 	talk_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	while (ret != 0) {
-		local_port++;
-		ret = bind(sockmsg, (struct sockaddr*)&talk_addr, sizeof(talk_addr));
+	ret = bind(sockmsg, (struct sockaddr*)&talk_addr, sizeof(talk_addr));
+	if (ret != 0) {
+		perror("bind");
+		exit(1);
+	}
+	len = sizeof local_addr;
+	memset(&local_addr, 0, len);
+	if(getsockname(sockmsg, (struct sockaddr *)(&local_addr), &len) < 0)
+	{
+		perror("getsockname");
+		exit(1);
 	}
 	ret = listen(sockmsg, LISTEN_QUEUE);
 	if (ret != 0) {
@@ -53,6 +127,7 @@ void *recvMsg(void *arg)
 		exit(1);
 	}
 	new_fd = accept(sockmsg, (struct sockaddr*)&listen_addr, &listen_len);
+	printf("real\n");
 	for(;;)
 	{
 		memset(buf, 0, sizeof buf);
@@ -65,26 +140,39 @@ void *recvMsg(void *arg)
 void *sendMsg(void *arg)
 {
 	int sockmsg;
+	int i;
 	struct sockaddr_in listen_addr;
-	char *name = (char*)arg;
+	char *uid;
+	char buf[BUFSIZE];
+	for (i = 0; i < nUser; i++) {
+		printf("%s\n", user[i].uid);
+	}
+	printf("is online\n");
+	uid = (char*)malloc(sizeof(char)*20);
+	fgets(uid, sizeof uid, stdin);
+	for (i = 0; i < nUser; i++) {
+		if (!strncmp(uid, user[i].uid, strlen(uid)-1)) {
+			printf("no break???\n");
+			break;
+		}
+	}
 	sockmsg = socket(AF_INET, SOCK_STREAM, 0);
-	setReuseAddr(sockfd);
 	listen_addr.sin_family = AF_INET;
-	listen_addr.sin_port = htons(SERV_PORT);
-	inet_pton(AF_INET, "127.0.0.1", &listen_addr.sin_addr);
-	connect(sockfd, (struct sockaddr *)(&listen_addr), sizeof listen_addr);
-	printf("hello send\n");
+	listen_addr.sin_port = htons(user[i].port);
+	inet_pton(AF_INET, user[i].ip, &listen_addr.sin_addr);
+	connect(sockmsg, (struct sockaddr *)(&listen_addr), sizeof listen_addr);
+	printf("connect\n");
+	for(;;)	{
+		fgets(buf, sizeof buf, stdin);
+		send(sockmsg, buf, strlen(buf), 0);
+	}
 }
 
-
-void tcpClient()
-{
-}
 
 void udpClient(char *msg)
 {
 	int sockfd, numbytes;
-	char buf[MAXBUFLEN];
+	char buf[BUFSIZE];
 	struct addrinfo hints, *servinfo, *p;
 	int rv;
 
@@ -128,76 +216,126 @@ void udpClient(char *msg)
 	close(sockfd);
 }
 
+*/
+
 
 int main(int argc, const char *argv[])
 {
-	char buf[1024];
+	char buf[BUFSIZE], bufmsg[BUFSIZE];
+	int socksrv;
 	struct sockaddr_in server_addr;
 	socklen_t len = sizeof local_addr;
 	int bytes;
+	//select 
+	fd_set rfds, orfds;
+	char uid[10];
+	char *pTmp, *p;
+	int i;
 
 	pthread_t nRecv, nSend;
 
 	if (argc != 2) {
-		printf("usage: \"name\"\n");
+		printf("usage: \"uid\"\n");
 		return 0;
 	}
-	printf("welcome %s\n", argv[1]);
+	memcpy(uid, argv[1], sizeof uid);
+	printf("welcome %s\n", uid);
 	
-	sockfd = socket(PF_INET, SOCK_STREAM, 0);
-	setReuseAddr(sockfd);
+	socksrv = socket(PF_INET, SOCK_STREAM, 0);
+	setReuseAddr(socksrv);
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(SERV_PORT);
 	inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
-	connect(sockfd, (struct sockaddr *)(&server_addr), sizeof server_addr);
-	if(getsockname(sockfd, (struct sockaddr *)(&local_addr), &len) < 0)
+	connect(socksrv, (struct sockaddr *)(&server_addr), sizeof server_addr);
+	/*
+	if(getsockname(socksrv, (struct sockaddr *)(&local_addr), &len) < 0)
 	{
 		perror("getsockname");
 		exit(1);
 	}
-	printf("len = %d\n", len);
-	printf("%s, %d\n", inet_ntoa(local_addr.sin_addr), ntohs(local_addr.sin_port));
-	printf("len = %d\n", strlen(inet_ntoa(local_addr.sin_addr)));
-
-	/*
-	if(pthread_create(&nRecv, NULL, recvMsg, NULL) != 0)
-	{
-		perror("pthread_create");
-		exit(1);
-	}
-	if(pthread_create(&nSend, NULL, sendMsg, "aaa") != 0)
-	{
-		perror("pthread_create");
-		exit(1);
-	}
 	*/
-	bytes = send(sockfd, argv[1], strlen(argv[1]), 0);
+	//printf("%s, %d\n", inet_ntoa(local_addr.sin_addr), ntohs(local_addr.sin_port));
+
+	//3 bytes for LOGIN
+	//4 bytes for port 
+	sprintf(buf, "%s", LOGIN);
+	sprintf(&buf[3], "%s", argv[1]);
+	bytes = send(socksrv, buf, sizeof buf, 0);
 	if (bytes < 0) {
 		perror("send");
 		return 1;
 	}
+	heartbeat_cli(socksrv, 3, 3);
+	FD_ZERO(&orfds);
+	FD_SET(STDIN_FILENO, &orfds);
+	FD_SET(socksrv, &orfds);
 	for(;;)
 	{
-		sleep(10000);
-		fgets(buf, sizeof buf, stdin);
-		bytes = send(sockfd, buf, strlen(buf), 0);
-		if (bytes < 0) {
-			perror("send");
-			return 1;
-		}
-
-		printf("send %d bytes!\n", bytes);
+		rfds = orfds;
 		memset(buf, 0, sizeof buf);
+		if (select(socksrv+1, &rfds, NULL, NULL, NULL) == -1) {
+			if (errno == EINTR) {
+				continue;
+			}
+			perror("select");
+			break;
+		}
+		if (FD_ISSET(socksrv, &rfds)) {
+			bytes = recv(socksrv, buf, sizeof buf, 0);
+			if (bytes < 0) {
+				perror("recv");
+			}
+			if (!memcmp(HEART, buf, 3)) {
+				getUser(buf);
+			}
+			else if (!memcmp(MESSAGE, buf, 3)) {
+				memcpy(uid, &buf[3], sizeof uid);
+				pTmp = &buf[13];
+				printf("%s: %s\n", uid, pTmp);
+			}
+			nprobes = 0;
+		}
+		else if (FD_ISSET(STDIN_FILENO, &rfds)) {
+			fgets(buf, sizeof buf, stdin);
+			bytes = strlen(buf);
+			if (bytes>0 && buf[--bytes]=='\n') {
+				buf[bytes] = 0;
+			}
+			pTmp = buf;
+			p = strsep(&pTmp, " ");
+			memcpy(bufmsg, MESSAGE, 3);
+			memcpy(&bufmsg[3], p, 10);
+			memcpy(&bufmsg[13], uid, 10);
+			memcpy(&bufmsg[23], pTmp, BUFSIZE-23);
+			bytes = send(socksrv, bufmsg, sizeof bufmsg, 0);
+			if (bytes < 0) {
+				perror("send");
+			}
+			p =  NULL;
+			pTmp = NULL;
+		}
+		/*
+		   bytes = recv(socksrv, buf, sizeof buf, 0);
+		   buf[bytes] = '\0';
+		   printf("%s\n", buf);
+
+		   fgets(buf, sizeof buf, stdin);
+		   bytes = send(socksrv, buf, strlen(buf), 0);
+		   if (bytes < 0) {
+		   perror("send");
+		   return 1;
+		   }
+
+		   printf("send %d bytes!\n", bytes);
+		   memset(buf, 0, sizeof buf);
+		   alarm(100);
+		   */
 	}
 	/*
-	bytes = recv(sockfd, buf, sizeof(buf), 0);
-	printf("receive %d bytes!\n", bytes);
-	buf[bytes] = '\0';
-	printf("%s\n", buf);
 	*/
 
 
 
-	close(sockfd);
+	close(socksrv);
 	return 0;
 }
