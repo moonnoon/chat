@@ -290,8 +290,8 @@ int main(int argc, const char *argv[])
 			}
 			else if (!memcmp(MESSAGE, buf, 3)) {
 				memcpy(uid, &buf[3], sizeof uid);
-				pTmp = &buf[13];
-				printf("%s: %s\n", uid, pTmp);
+				pTmp = &buf[23];
+				printf("%s %s\n%s\n", &buf[13], uid, pTmp);
 			}
 			nprobes = 0;
 		}
@@ -304,8 +304,8 @@ int main(int argc, const char *argv[])
 			pTmp = buf;
 			p = strsep(&pTmp, " ");
 			memcpy(bufmsg, MESSAGE, 3);
-			memcpy(&bufmsg[3], p, 10);
-			memcpy(&bufmsg[13], uid, 10);
+			memcpy(&bufmsg[3], argv[1], 10);
+			memcpy(&bufmsg[13], p, 10);
 			memcpy(&bufmsg[23], pTmp, BUFSIZE-23);
 			bytes = send(socksrv, bufmsg, sizeof bufmsg, 0);
 			if (bytes < 0) {
@@ -314,27 +314,7 @@ int main(int argc, const char *argv[])
 			p =  NULL;
 			pTmp = NULL;
 		}
-		/*
-		   bytes = recv(socksrv, buf, sizeof buf, 0);
-		   buf[bytes] = '\0';
-		   printf("%s\n", buf);
-
-		   fgets(buf, sizeof buf, stdin);
-		   bytes = send(socksrv, buf, strlen(buf), 0);
-		   if (bytes < 0) {
-		   perror("send");
-		   return 1;
-		   }
-
-		   printf("send %d bytes!\n", bytes);
-		   memset(buf, 0, sizeof buf);
-		   alarm(100);
-		   */
 	}
-	/*
-	*/
-
-
 
 	close(socksrv);
 	return 0;

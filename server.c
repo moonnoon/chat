@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <sys/epoll.h>
 #include <signal.h>
+#include <time.h>
 
 #include "list.h"
 #include "chat.h"
@@ -161,6 +162,10 @@ int send_reply(struct sockfd_opt *p_so)
 	char *ip;
 	int port;
 	char uid[10];
+	//time
+	char timefmt[10];
+	time_t td;
+	struct tm tm;
 
 	//get cilent addr
 	socklen_t len = sizeof client_addr;
@@ -223,17 +228,19 @@ int send_reply(struct sockfd_opt *p_so)
 	}
 
 	else if (!memcmp(MESSAGE, buf, 3)) {
-		memcpy(uid, &buf[3], sizeof uid);
+		memcpy(uid, &buf[13], sizeof uid);
+		printf("%s\n", uid);
 		list_for_each_entry(pos, &ulist, list)
 		{
 			if (!strncmp(pos->uid, uid, sizeof uid)) {
 				break;
 			}
 		}
-		memcpy(bufmsg, MESSAGE, 3);
-		memcpy(&bufmsg[3], &buf[13], 10);
-		memcpy(&bufmsg[13], &buf[23], BUFSIZE - 23);
-		result = send(pos->fd, bufmsg, sizeof bufmsg, 0);
+		time(&td);
+		tm = *localtime(&td);
+		strftime(timefmt, sizeof timefmt, "%H:%M:%S", &tm);
+		memcpy(&buf[13], timefmt, sizeof timefmt);
+		result = send(pos->fd, buf, sizeof buf, 0);
 		if (result < 0) {
 			perror("send");
 		}
