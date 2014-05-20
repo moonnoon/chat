@@ -1,84 +1,83 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <string.h>
-#include <pthread.h>
 #include <signal.h>
-#include <errno.h>
-#include <fcntl.h>
+#include <pthread.h>
 #include "chat.h"
 
 #define LISTEN_QUEUE 5
 
-struct sockaddr_in local_addr;
-//int sockmsg;
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-static int		servfd;
+int socksrv;
+fd_set rfds, orfds;
+char *UID;
+
 static int		nsec;			/* #seconds betweeen each alarm */
 static int		maxnprobes;		/* #probes w/no response before quit */
 static int		nprobes;		/* #probes since last server response */
-static void	sig_urg(int), sig_alrm(int);
 
 struct online
 {
-	char *uid;
+	char uid[10];
 };
 static int nUser;
 
 struct online *user;
+//to python
+char pyUser[BUFSIZE];
+char ret[BUFSIZE];
+char msg[BUFSIZE*20];
 
 //create user list
 int getUser(char *p)
 {
 	//printf("%s\n", p);
-	free(user);
+	struct online *pUser, *pExchange;
 	int i;
 	char *tmp = &p[4];
 	memcpy(&nUser, p, 4);
-	user = (struct online*)malloc(sizeof(struct online)*nUser);
+	pUser = (struct online*)malloc(sizeof(struct online)*nUser);
 	p = &p[4];
+	memcpy(pyUser, p, sizeof pyUser-4);
 	for (i = 0; i < nUser; i++) {
 		tmp = strsep(&p, ":");
-		user[i].uid = tmp;
-		printf("%s\n", tmp);
+		memcpy(pUser[i].uid, tmp, 10);
+		//printf("%d:%s\n", i, tmp);
 	}
+	pExchange = user;
+	user = pUser;
+	free(pExchange);
 	return 0;
 }
-
-void heartbeat_cli(int servfd_arg, int nsec_arg, int maxnprobes_arg)
+void sig_alrm(int signo)
 {
-	servfd = servfd_arg;		/* set globals for signal handlers */
+	int n;
+	char ch = HEART;
+	if (++nprobes > maxnprobes) {
+		fprintf(stderr, "server is unreachable\n");
+		exit(0);
+	}
+	n = send(socksrv, &ch, BUFSIZE, MSG_OOB);
+	if (n < 0) {
+		perror("send");
+		exit(0);
+	}
+	alarm(nsec);
+	return;
+}
+
+void heartbeat_cli(int nsec_arg, int maxnprobes_arg)
+{
 	if ( (nsec = nsec_arg) < 1)
 		nsec = 1;
 	if ( (maxnprobes = maxnprobes_arg) < nsec)
 		maxnprobes = nsec;
 	nprobes = 0;
 
-	fcntl(servfd, F_SETOWN, getpid());
+	fcntl(socksrv, F_SETOWN, getpid());
 
 	signal(SIGALRM, sig_alrm);
 	alarm(nsec);
 }
 
-static void sig_alrm(int signo)
-{
-	int n;
-	if (++nprobes > maxnprobes) {
-		fprintf(stderr, "server is unreachable\n");
-		exit(0);
-	}
-	n = send(servfd, HEART, sizeof HEART, MSG_OOB);
-	if (n < 0) {
-		perror("send");
-		exit(0);
-	}
-	alarm(nsec);
-	return;					/* may interrupt client code */
-}
 
 
 void setReuseAddr(int sock)
@@ -91,148 +90,30 @@ void setReuseAddr(int sock)
 	}
 }
 
-/*
-void *recvMsg(void *arg)
+int getPos(char *uid)
 {
-	struct sockaddr_in listen_addr, talk_addr;
-	int ret = 1;
-	int sockmsg, new_fd;
-	char buf[BUFSIZE];
-	socklen_t len;
-	socklen_t listen_len = sizeof listen_addr;
-	sockmsg = socket(AF_INET, SOCK_STREAM, 0);
-	printf("0\n");
-	if(sockmsg < 0) {
-		perror("socket");
-		exit(1);
-	}
-	talk_addr.sin_port = ntohs(0);
-	talk_addr.sin_family = AF_INET;
-	talk_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	ret = bind(sockmsg, (struct sockaddr*)&talk_addr, sizeof(talk_addr));
-	if (ret != 0) {
-		perror("bind");
-		exit(1);
-	}
-	len = sizeof local_addr;
-	memset(&local_addr, 0, len);
-	if(getsockname(sockmsg, (struct sockaddr *)(&local_addr), &len) < 0)
-	{
-		perror("getsockname");
-		exit(1);
-	}
-	ret = listen(sockmsg, LISTEN_QUEUE);
-	if (ret != 0) {
-		perror("listen");
-		exit(1);
-	}
-	new_fd = accept(sockmsg, (struct sockaddr*)&listen_addr, &listen_len);
-	printf("real\n");
-	for(;;)
-	{
-		memset(buf, 0, sizeof buf);
-		ret = recv(new_fd, buf, sizeof buf, 0);
-		printf("%s\n", buf);
-	}
-	printf("Hello recv\n");
-}
-
-void *sendMsg(void *arg)
-{
-	int sockmsg;
 	int i;
-	struct sockaddr_in listen_addr;
-	char *uid;
-	char buf[BUFSIZE];
 	for (i = 0; i < nUser; i++) {
-		printf("%s\n", user[i].uid);
-	}
-	printf("is online\n");
-	uid = (char*)malloc(sizeof(char)*20);
-	fgets(uid, sizeof uid, stdin);
-	for (i = 0; i < nUser; i++) {
-		if (!strncmp(uid, user[i].uid, strlen(uid)-1)) {
-			printf("no break???\n");
-			break;
+		if (!strcmp(user[i].uid, uid)) {
+			return i;
 		}
 	}
-	sockmsg = socket(AF_INET, SOCK_STREAM, 0);
-	listen_addr.sin_family = AF_INET;
-	listen_addr.sin_port = htons(user[i].port);
-	inet_pton(AF_INET, user[i].ip, &listen_addr.sin_addr);
-	connect(sockmsg, (struct sockaddr *)(&listen_addr), sizeof listen_addr);
-	printf("connect\n");
-	for(;;)	{
-		fgets(buf, sizeof buf, stdin);
-		send(sockmsg, buf, strlen(buf), 0);
-	}
+	return -1;
 }
 
-
-void udpClient(char *msg)
-{
-	int sockfd, numbytes;
-	char buf[BUFSIZE];
-	struct addrinfo hints, *servinfo, *p;
-	int rv;
-
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_flags = AI_PASSIVE;
-
-	if((rv = getaddrinfo(NULL, "8873", &hints, &servinfo)) != 0)
-	{
-		fprintf(stderr, "getaddrinfo %s\n", gai_strerror(rv));
-		return;
-	}
-
-	for (p = servinfo; p != NULL; p = p->ai_next) {
-		if((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
-		{
-			close(sockfd);
-			perror("talker: connect");
-			continue;
-		}
-		break;
-	}
-
-	if(p == NULL)
-	{
-		fprintf(stderr, "client: failed to connect\n");
-		return;
-	}
-
-	freeaddrinfo(servinfo);
-
-	if((numbytes = sendto(sockfd, msg, strlen(msg), 0,
-					p->ai_addr, p->ai_addrlen)) == -1)
-	{
-		perror("talker: sendto");
-		return;
-	}
-	printf("talker: send %d bytes\n", numbytes);
-	printf("%s\n", msg);
-	close(sockfd);
-}
-
-*/
-
+/*
 
 int main(int argc, const char *argv[])
 {
 	char buf[BUFSIZE], bufmsg[BUFSIZE];
 	int socksrv;
 	struct sockaddr_in server_addr;
-	socklen_t len = sizeof local_addr;
 	int bytes;
 	//select 
 	fd_set rfds, orfds;
 	char uid[10];
 	char *pTmp, *p;
 	int i;
-
-	pthread_t nRecv, nSend;
 
 	if (argc != 2) {
 		printf("usage: \"uid\"\n");
@@ -245,27 +126,18 @@ int main(int argc, const char *argv[])
 	setReuseAddr(socksrv);
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(SERV_PORT);
-	inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
+	inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
 	connect(socksrv, (struct sockaddr *)(&server_addr), sizeof server_addr);
-	/*
-	if(getsockname(socksrv, (struct sockaddr *)(&local_addr), &len) < 0)
-	{
-		perror("getsockname");
-		exit(1);
-	}
-	*/
-	//printf("%s, %d\n", inet_ntoa(local_addr.sin_addr), ntohs(local_addr.sin_port));
 
-	//3 bytes for LOGIN
-	//4 bytes for port 
-	sprintf(buf, "%s", LOGIN);
-	sprintf(&buf[3], "%s", argv[1]);
+	//1 bytes for LOGIN
+	buf[0] = LOGIN;
+	sprintf(&buf[1], "%s", argv[1]);
 	bytes = send(socksrv, buf, sizeof buf, 0);
 	if (bytes < 0) {
 		perror("send");
 		return 1;
 	}
-	heartbeat_cli(socksrv, 3, 3);
+	heartbeat_cli(1, 3);
 	FD_ZERO(&orfds);
 	FD_SET(STDIN_FILENO, &orfds);
 	FD_SET(socksrv, &orfds);
@@ -285,13 +157,13 @@ int main(int argc, const char *argv[])
 			if (bytes < 0) {
 				perror("recv");
 			}
-			if (!memcmp(HEART, buf, 3)) {
-				getUser(buf);
+			if (HEART == buf[0]) {
+				getUser(&buf[1]);
 			}
-			else if (!memcmp(MESSAGE, buf, 3)) {
-				memcpy(uid, &buf[3], sizeof uid);
-				pTmp = &buf[23];
-				printf("%s %s\n%s\n", &buf[13], uid, pTmp);
+			else if (MESSAGE == buf[0]) {
+				memcpy(uid, &buf[1], sizeof uid);
+				pTmp = &buf[21];
+				printf("%s %s\n%s\n", &buf[11], uid, pTmp);
 			}
 			nprobes = 0;
 		}
@@ -303,10 +175,10 @@ int main(int argc, const char *argv[])
 			}
 			pTmp = buf;
 			p = strsep(&pTmp, " ");
-			memcpy(bufmsg, MESSAGE, 3);
-			memcpy(&bufmsg[3], argv[1], 10);
-			memcpy(&bufmsg[13], p, 10);
-			memcpy(&bufmsg[23], pTmp, BUFSIZE-23);
+			bufmsg[0] = MESSAGE;
+			memcpy(&bufmsg[1], argv[1], 10);
+			memcpy(&bufmsg[11], p, 10);
+			memcpy(&bufmsg[21], pTmp, BUFSIZE-21);
 			bytes = send(socksrv, bufmsg, sizeof bufmsg, 0);
 			if (bytes < 0) {
 				perror("send");
@@ -318,4 +190,123 @@ int main(int argc, const char *argv[])
 
 	close(socksrv);
 	return 0;
+}
+
+*/
+
+//For python call
+int init()
+{
+	struct sockaddr_in server_addr;
+	int ret;
+	socksrv = socket(PF_INET, SOCK_STREAM, 0);
+	if (socksrv < 0) {
+		perror("socket");
+		return 1;
+	}
+	setReuseAddr(socksrv);
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(SERV_PORT);
+	inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
+	ret = connect(socksrv, (struct sockaddr *)(&server_addr), sizeof server_addr);
+	if (ret < 0) {
+		perror("connect");
+		return 1;
+	}
+
+	printf("finished\n");
+	return 0;
+}
+
+int login(char *uid)
+{
+	int bytes;
+	char buf[BUFSIZE];
+	UID = strdup(uid);
+	buf[0] = LOGIN;
+	sprintf(&buf[1], "%s", uid);
+	bytes = send(socksrv, buf, sizeof buf, 0);
+	if (bytes < 0) {
+		perror("send");
+		return 1;
+	}
+	heartbeat_cli(1, 3);
+	FD_ZERO(&orfds);
+	//FD_SET(STDIN_FILENO, &orfds);
+	FD_SET(socksrv, &orfds);
+	return 0;
+}
+
+int sign_in(char *uid, char *password)
+{
+	return 0;
+}
+
+char *getUsers()
+{
+	return pyUser;
+}
+
+void main_loop()
+{
+	char buf[BUFSIZE], bufmsg[BUFSIZE];
+	int bytes;
+	for(;;)
+	{
+		rfds = orfds;
+		memset(buf, 0, sizeof buf);
+		if (select(socksrv+1, &rfds, NULL, NULL, NULL) == -1) {
+			if (errno == EINTR) {
+				continue;
+			}
+			perror("select");
+			break;
+		}
+		if (FD_ISSET(socksrv, &rfds)) {
+			bytes = recv(socksrv, buf, sizeof buf, 0);
+			if (bytes < 0) {
+				perror("recv");
+			}
+			if (HEART == buf[0]) {
+				getUser(&buf[1]);
+			}
+			else if (MESSAGE == buf[0]) {
+				//memcpy(uid, &buf[1], sizeof uid);
+				//pTmp = &buf[21];
+				sprintf(bufmsg, "%s %s\n%s\n", &buf[11], &buf[1], &buf[21]);
+				//printf("pos %d\n", getPos(&buf[1]));
+				printf("recv\n");
+				int pos = getPos(&buf[1]);
+				//memcpy(user[pos].pMsg, bufmsg, BUFSIZE);
+				//user[pos].flag = 1;
+			}
+			nprobes = 0;
+		}
+	}
+}
+
+int sendMSG(char *receiver, char *msg)
+{
+	printf("start send\n");
+	int bytes;
+	char buf[BUFSIZE];
+	bytes = strlen(msg);
+	buf[0] = MESSAGE;
+	memcpy(&buf[1], UID, 10);
+	memcpy(&buf[11], receiver, 10);
+	memcpy(&buf[21], msg, BUFSIZE-21);
+	bytes = send(socksrv, buf, sizeof buf, 0);
+	if (bytes < 0) {
+		perror("send");
+		return 1;
+	}
+	return 0;
+}
+
+char *haveMSG()
+{
+}
+
+char *getMSG(char *uid)
+{
 }

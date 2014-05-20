@@ -1,16 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <string.h>
-#include <netdb.h>
-#include <fcntl.h>
-#include <arpa/inet.h>
-#include <errno.h>
-#include <assert.h>
 #include <sys/epoll.h>
-#include <signal.h>
 #include <time.h>
 
 #include "list.h"
@@ -37,8 +25,8 @@ void setnonblocking(int );
 
 struct hlist_head fd_hash[MAXCONN];
 int epfd;
-int num;
 struct epoll_event *events;
+static int nCurrentUser;
 
 LIST_HEAD(ulist);
 
@@ -185,36 +173,41 @@ int send_reply(struct sockfd_opt *p_so)
 				free(pos->uid);
 				free(pos->ip);
 				list_del(&pos->list);
+				free(pos);
 			}
 		if(result<0 && errno != ECONNRESET)
 			bail("recv()");
+		nCurrentUser--;
 		return 0;
 	} 
-	if (!memcmp(HEART, buf, 3)) {
-		memset(buf, 0, sizeof buf);
+	if (HEART == buf[0]) {
+		//memset(buf, 0, sizeof buf);
 		int i = 0;
-		// 3 bytes for the online user;
-		p = &buf[4];
+		char tmp[10];
+		p = &buf[5];
 		list_for_each_entry(pos, &ulist, list)
 		{
 			if (strcmp(pos->uid, buf)) {
 				//sprintf(p, "%s,%s,%s:", pos->uid, pos->ip, pos->port);
-				sprintf(p, "%s:", pos->uid);
-				p += strlen(p);
+				sprintf(tmp, "%s:", pos->uid);
+				memcpy(p, tmp, 10);
+				p += strlen(tmp);
 				i++;
 			}
 			//printf("%s\n", pos->uid);
 			//printf("port: %s\n", pos->port);
 		}
-		memcpy(buf, &i, 4);
+		p = &buf[5];
+		p[strlen(p)-1] = '\0';
+		memcpy(&buf[1], &i, 4);
 		result = send(p_so->fd, buf, sizeof buf, 0);
 		if (result < 0) {
 			perror("send");
 		}
 	}
 
-	else if (!memcmp(LOGIN, buf, 3)) {
-		p = &buf[3];
+	else if (LOGIN == buf[0]) {
+		p = &buf[1];
 		buf[result] = '\0';
 		printf("%s login\n", p);
 
@@ -225,10 +218,12 @@ int send_reply(struct sockfd_opt *p_so)
 		pTmp->port = port;
 		pTmp->fd = p_so->fd;
 		list_add_tail(&pTmp->list, &ulist);
+
+		nCurrentUser++;
 	}
 
-	else if (!memcmp(MESSAGE, buf, 3)) {
-		memcpy(uid, &buf[13], sizeof uid);
+	else if (MESSAGE == buf[0]) {
+		memcpy(uid, &buf[11], sizeof uid);
 		printf("%s\n", uid);
 		list_for_each_entry(pos, &ulist, list)
 		{
@@ -236,13 +231,18 @@ int send_reply(struct sockfd_opt *p_so)
 				break;
 			}
 		}
-		time(&td);
-		tm = *localtime(&td);
-		strftime(timefmt, sizeof timefmt, "%H:%M:%S", &tm);
-		memcpy(&buf[13], timefmt, sizeof timefmt);
-		result = send(pos->fd, buf, sizeof buf, 0);
-		if (result < 0) {
-			perror("send");
+			time(&td);
+			tm = *localtime(&td);
+			strftime(timefmt, sizeof timefmt, "%H:%M:%S", &tm);
+			memcpy(&buf[11], timefmt, sizeof timefmt);
+			result = send(pos->fd, buf, sizeof buf, 0);
+			if (result < 0) {
+				perror("send");
+			}
+		if (&pos->list != &ulist) {
+		}
+		else {
+			//printf("offline\n");
 		}
 	}
 	return 0;
@@ -281,7 +281,6 @@ int create_conn(struct sockfd_opt *p_so)
 	hash = intHash(conn_fd) & MAXCONN;
 	//printf("hash add: %d\n", hash);
 	hlist_add_head(&p_so->hlist, &fd_hash[hash]);
-	num++;
 
 	ev.data.fd = conn_fd;
 	//ev.events = EPOLLIN | EPOLLET;
@@ -306,7 +305,6 @@ int init(int fd)
 
 	//init hashtable
 	hlist_empty(&fd_hash[0]);
-	num = 0;
 	if((p_so = malloc(sizeof(struct sockfd_opt))) == NULL) {
 		perror("malloc");
 		return -1;
@@ -321,12 +319,12 @@ int init(int fd)
 	ev.data.fd = fd;
 	//ev.events = EPOLLIN | EPOLLET;
 	ev.events = EPOLLIN;
-
 	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
 	if (ret) {
 		bail("epoll_ctl");
 	}
-	num++;
+
+	nCurrentUser = 0;
 
 	return 0;
 }
