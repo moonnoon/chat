@@ -11,17 +11,19 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include "list.h"
 
 //packet
 #define SIGN_IN	'1'
 #define LOGIN 	'2'
 #define HEART	'3'
-#define MESSAGE	'4'
-#define ERROR	'5'
+#define ONLINE	'4'
+#define OFFLINE	'5'
+#define MESSAGE	'6'
+#define ERROR	'7'
 
 //Error types
 #define UID_EXIST	'1'
-#define OFFLINE		'2'
 
 
 #define BUFSIZE 1024

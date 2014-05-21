@@ -1,7 +1,6 @@
 #include <sys/epoll.h>
 #include <time.h>
 
-#include "list.h"
 #include "chat.h"
 
 
@@ -162,6 +161,7 @@ int send_reply(struct sockfd_opt *p_so)
 	port = ntohs(client_addr.sin_port);
 	if((result = recv(p_so->fd, buf, sizeof buf, 0)) <= 0)
 	{
+		char tmp[11];
 		//client close connection;
 		close(p_so->fd);
 		hlist_del(&p_so->hlist);
@@ -170,37 +170,27 @@ int send_reply(struct sockfd_opt *p_so)
 		list_for_each_entry_safe(pos, n, &ulist, list)
 			if (!strcmp(pos->ip, ip) && pos->port == port) {
 				printf("goodbye %s\n", pos->uid);
+				memcpy(&tmp[1], pos->uid, 10);
 				free(pos->uid);
 				free(pos->ip);
 				list_del(&pos->list);
 				free(pos);
+				break;
 			}
 		if(result<0 && errno != ECONNRESET)
 			bail("recv()");
 		nCurrentUser--;
+		tmp[0] = OFFLINE;
+		list_for_each_entry(pos, &ulist, list)
+		{
+			send(pos->fd, tmp, 11, 0);
+		}
+		pos = NULL;
 		return 0;
 	} 
 	if (HEART == buf[0]) {
-		//memset(buf, 0, sizeof buf);
-		int i = 0;
-		char tmp[10];
-		p = &buf[5];
-		list_for_each_entry(pos, &ulist, list)
-		{
-			if (strcmp(pos->uid, buf)) {
-				//sprintf(p, "%s,%s,%s:", pos->uid, pos->ip, pos->port);
-				sprintf(tmp, "%s:", pos->uid);
-				memcpy(p, tmp, 10);
-				p += strlen(tmp);
-				i++;
-			}
-			//printf("%s\n", pos->uid);
-			//printf("port: %s\n", pos->port);
-		}
-		p = &buf[5];
-		p[strlen(p)-1] = '\0';
-		memcpy(&buf[1], &i, 4);
-		result = send(p_so->fd, buf, sizeof buf, 0);
+		char ch = 'a';
+		result = send(p_so->fd, &ch, 1, 0);
 		if (result < 0) {
 			perror("send");
 		}
@@ -211,20 +201,39 @@ int send_reply(struct sockfd_opt *p_so)
 		buf[result] = '\0';
 		printf("%s login\n", p);
 
+
 		//add to user list
 		struct user *pTmp = (struct user*)malloc(sizeof(struct user));
 		pTmp->uid = strdup(p);
 		pTmp->ip = strdup(ip); 
 		pTmp->port = port;
 		pTmp->fd = p_so->fd;
+		if (!list_empty(&ulist)) {
+			char tmp[11];
+			char users[11];
+			p = &buf[1];
+			users[0] = ONLINE;
+			memset(&buf[1], 0, sizeof(buf)-1);
+			list_for_each_entry(pos, &ulist, list)
+			{
+				memcpy(&users[1], pTmp->uid, 10);
+				send(pos->fd, users, 11, 0);
+				sprintf(tmp, "%s:", pos->uid);
+				memcpy(p, tmp, 10);
+				p += strlen(tmp);
+			}
+			pos = NULL;
+			*(p-1) = '\0';
+			send(pTmp->fd, buf, sizeof buf, 0);
+		}
 		list_add_tail(&pTmp->list, &ulist);
 
 		nCurrentUser++;
 	}
 
 	else if (MESSAGE == buf[0]) {
+		memset(uid, 0, sizeof uid);
 		memcpy(uid, &buf[11], sizeof uid);
-		printf("%s\n", uid);
 		list_for_each_entry(pos, &ulist, list)
 		{
 			if (!strncmp(pos->uid, uid, sizeof uid)) {
@@ -239,11 +248,6 @@ int send_reply(struct sockfd_opt *p_so)
 			if (result < 0) {
 				perror("send");
 			}
-		if (&pos->list != &ulist) {
-		}
-		else {
-			//printf("offline\n");
-		}
 	}
 	return 0;
 }

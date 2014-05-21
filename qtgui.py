@@ -8,21 +8,23 @@ import time
 import sys
 from clientlib import *
 
-class MainWindow(QtGui.QWidget):
+class MainWindow(QtGui.QWidget, threading.Thread):
 	def __init__(self, parent=None):
 		QtGui.QMainWindow.__init__(self, parent)
+		threading.Thread.__init__(self)
 		self.setWindowTitle("chatDemo")
 		self.setFixedSize(250, 600)
 
 		self.table = QtGui.QTableWidget(20, 1)
-		self.table.setHorizontalHeaderLabels([u'online      '])
+		self.table.setHorizontalHeaderLabels([u'online'])
 		self.table.verticalHeader().setVisible(False)
 		self.table.setEditTriggers(QtGui.QTableWidget.NoEditTriggers)
 		self.table.setSelectionBehavior(QtGui.QTableWidget.SelectRows)
 		self.table.setSelectionMode(QtGui.QTableWidget.SingleSelection)
 		self.table.setAlternatingRowColors(True)
 
-		self.table.cellDoubleClicked.connect(self.chating)
+		#self.table.cellDoubleClicked.connect(self.chating)
+		self.table.clicked.connect(self.chating)
 
 		button = QtGui.QPushButton(u'聊天室', parent=self)
 
@@ -34,19 +36,49 @@ class MainWindow(QtGui.QWidget):
 
 		self.setLayout(layout)
 
+		self.flag = True
+		self.setDaemon(True)
+		self.start()
+
 	def chating(self):
-		uid = self.table.currentItem().text()
-		dialog = chat(self, uid)
-		dialog.exec_()
+		if self.table.currentItem():
+			uid = self.table.currentItem().text()
+			dialog = chat(self, uid)
+			uid = str(uid)
+			dialog.exec_()
+			while lib.haveMsg(uid) == 1:
+				print 'hahahah'
+				t = lib.getMsg
+				t.restype = c_char_p
+				msg = lib.getMsg(str(self.uid))
+				self.outText.append(str(msg))
 
 	def chatroom(self):
 		dialog = chat()
 		dialog.exec_()
+	
+	def run(self):
+		while self.flag:
+			t = lib.getUsers
+			t.restype = c_char_p
+			users = lib.getUsers()
+			self.table.clearContents()
+			if users:
+				userlist = users.split(':')
+				i = 0
+				for value in userlist:
+					newItem = QtGui.QTableWidgetItem(value)
+					self.table.setItem(i, 0, newItem)
+					i = i+1
+			time.sleep(1)
+	def exit(self):
+		self.flag = False
 
 
 class chat(QtGui.QDialog, threading.Thread):
 	def __init__(self, parent=None, uid="Noname"):
 		QtGui.QDialog.__init__(self, parent)
+		threading.Thread.__init__(self)
 		self.setWindowTitle(uid)
 		self.resize(402, 392)
 		self.uid = uid
@@ -58,13 +90,12 @@ class chat(QtGui.QDialog, threading.Thread):
 
 		self.inText = QtGui.QTextEdit(self)
 		grid.addWidget(self.inText, 1, 1, 1, 1)
-		self.inText.setText("god")
 
-		# 创建ButtonBox，用户确定和取消
 		self.send = QtGui.QPushButton(u'发送', self)
 		self.close = QtGui.QPushButton(u'关闭', self)
 		self.send.clicked.connect(self.Send)
-		self.connect(self.close,QtCore.SIGNAL("clicked()"),self, QtCore.SLOT("close()"))
+		self.close.clicked.connect(self.Close)
+		#self.connect(self.close,QtCore.SIGNAL("clicked()"),self, QtCore.SLOT("close()"))
 		layout = QtGui.QVBoxLayout()
 		layout.addLayout(grid)
 		spacerItem = QtGui.QSpacerItem(20, 48, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
@@ -75,10 +106,30 @@ class chat(QtGui.QDialog, threading.Thread):
 
 		self.setLayout(layout)
 
+		self.flag = True
+		self.setDaemon(True)
+		self.start()
+
 	def Send(self):
-		print 'Send'
 		lib.sendMSG(str(self.uid) , str(self.inText.toPlainText()))
-		return
+		self.inText.setText("")
+	def Close(self):
+		print 'Close'
+		self.exit()
+		self.destroy()
+	def run(self):
+		while self.flag:
+			i = lib.haveMsg(str(self.uid))
+			if i == 1:
+				print '.........get'
+				t = lib.getMsg
+				t.restype = c_char_p
+				msg = lib.getMsg(str(self.uid))
+				self.outText.append(str(msg))
+			time.sleep(1)
+	def exit(self):
+		self.flag = False
+
 
 class Sign(QtGui.QDialog):
 	def __init__(self, parent=None):
@@ -86,7 +137,6 @@ class Sign(QtGui.QDialog):
 		self.setWindowTitle(u"注册")
 		self.resize(240, 200)
 
-		# 表格布局，用来布局QLabel和QLineEdit及QSpinBox
 		grid = QtGui.QGridLayout()
 
 		grid.addWidget(QtGui.QLabel(u'用户名', parent=self), 0, 0, 1, 1)
@@ -158,8 +208,8 @@ class LoginDialog(QtGui.QDialog):
 		print 'login'
 		uid = str(self.leName.text())
 		lib.login(uid)
-		threadloop.start()
-		rl.start()
+		tl = loop()
+		tl.start()
 		self.accept()
 #		if self.leName.text() == '' and self.lePassword.text() == '':
 #			self.accept()
@@ -178,33 +228,9 @@ class LoginDialog(QtGui.QDialog):
 class loop(threading.Thread):
 	def __init__(self):
 		threading.Thread.__init__(self)
+		self.setDaemon(True)
 	def run(self):
 		lib.main_loop()
-
-class refreshlist(threading.Thread):
-	def __init__(self):
-		threading.Thread.__init__(self)
-	def run(self):
-		while True:
-			t = lib.getUsers
-			t.restype = c_char_p
-			users = lib.getUsers()
-			userlist = users.split(':')
-			t = lib.haveMSG
-			t.restype = c_char_p
-			have = lib.haveMSG()
-			print have
-			h = have.split(':')
-			i = 0
-			for value in userlist:
-				newItem = QtGui.QTableWidgetItem(value)
-				if len(have)!=0:
-					for pos in h:
-						if i == int(pos):
-							newItem.setBackgroudColor(QtQgui.QColor(0,255,0))
-				mainWindow.table.setItem(i, 0, newItem)
-				i = i+1
-			time.sleep(1)
 
 
 def init():
@@ -218,15 +244,11 @@ def login():
 	else:
 		return False
 
-threadloop = loop()
-threadloop.setDaemon(True)
-rl = refreshlist()
-rl.setDaemon(True)
-app = QtGui.QApplication(sys.argv)
-mainWindow = MainWindow()
 
 if __name__ == '__main__':
+	app = QtGui.QApplication(sys.argv)
 	init()
 	if login():
+		mainWindow = MainWindow()
 		mainWindow.show()
 		sys.exit(app.exec_())

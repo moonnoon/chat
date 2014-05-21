@@ -14,39 +14,24 @@ static int		nsec;			/* #seconds betweeen each alarm */
 static int		maxnprobes;		/* #probes w/no response before quit */
 static int		nprobes;		/* #probes since last server response */
 
-struct online
+struct onlineusers
 {
 	char uid[10];
+	int flag;
+	struct list_head lmsg;
+	struct list_head list;
 };
-static int nUser;
+LIST_HEAD(ulist);
+struct msg
+{
+	char buf[BUFSIZE];
+	struct list_head list;
+};
 
-struct online *user;
 //to python
-char pyUser[BUFSIZE];
 char ret[BUFSIZE];
 char msg[BUFSIZE*20];
 
-//create user list
-int getUser(char *p)
-{
-	//printf("%s\n", p);
-	struct online *pUser, *pExchange;
-	int i;
-	char *tmp = &p[4];
-	memcpy(&nUser, p, 4);
-	pUser = (struct online*)malloc(sizeof(struct online)*nUser);
-	p = &p[4];
-	memcpy(pyUser, p, sizeof pyUser-4);
-	for (i = 0; i < nUser; i++) {
-		tmp = strsep(&p, ":");
-		memcpy(pUser[i].uid, tmp, 10);
-		//printf("%d:%s\n", i, tmp);
-	}
-	pExchange = user;
-	user = pUser;
-	free(pExchange);
-	return 0;
-}
 void sig_alrm(int signo)
 {
 	int n;
@@ -88,17 +73,6 @@ void setReuseAddr(int sock)
 	if (ret) {
 		perror("setsockopt");
 	}
-}
-
-int getPos(char *uid)
-{
-	int i;
-	for (i = 0; i < nUser; i++) {
-		if (!strcmp(user[i].uid, uid)) {
-			return i;
-		}
-	}
-	return -1;
 }
 
 /*
@@ -194,6 +168,101 @@ int main(int argc, const char *argv[])
 
 */
 
+int initUsers(char *uids)
+{
+	char *tmp;
+	struct onlineusers *user;
+	printf("init %s\n", uids);
+	while (uids!=NULL) {
+		tmp = strsep(&uids, ":");
+		user = (struct onlineusers*)malloc(sizeof(struct onlineusers));
+		memcpy(user->uid, tmp, 10);
+		INIT_LIST_HEAD(&user->lmsg);
+		user->flag = 0;
+		list_add_tail(&user->list, &ulist);
+	}
+	return 0;
+}
+
+int addUser(char *uid)
+{
+	struct onlineusers *user = (struct onlineusers*)malloc(sizeof(struct onlineusers));
+	memcpy(user->uid, uid, 10);
+	INIT_LIST_HEAD(&user->lmsg);
+	user->flag = 0;
+	list_add_tail(&user->list, &ulist);
+	return 0;
+}
+
+int delUser(char *uid)
+{
+	printf("del......%s\n", uid);
+	pthread_mutex_lock(&lock);
+	struct onlineusers *pos, *n;
+	list_for_each_entry_safe(pos, n, &ulist, list)
+	{
+		if(!strcmp(pos->uid, uid)) {
+			list_del(&pos->list);
+			free(pos);
+			break;
+		}
+	}
+	//printf("segmentation fault\n");
+	pthread_mutex_unlock(&lock);
+	return 0;
+}
+
+inline struct onlineusers *getUser(char *uid)
+{
+	struct onlineusers *pos, *n;
+	list_for_each_entry_safe(pos, n, &ulist, list)
+	{
+		if (!strcmp(pos->uid, uid)) {
+			return pos;
+		}
+	}
+	return NULL;
+}
+
+int addMsg(char *uid, char *pMsg)
+{
+	pthread_mutex_lock(&lock);
+	struct onlineusers *user;
+	struct msg *m = (struct msg*)malloc(sizeof(struct msg));
+	memcpy(m->buf, pMsg, BUFSIZE);
+	user = getUser(uid);
+	list_add_tail(&m->list, &user->lmsg);
+	user->flag = 1;
+	pthread_mutex_unlock(&lock);
+	return 0;
+}
+
+int haveMsg(char *uid)
+{
+	if (getUser(uid)->flag) {
+		return 1;
+	}
+	return 0;
+}
+
+//must judge haveMsg before call it
+char *getMsg(char *uid)
+{
+	pthread_mutex_lock(&lock);
+	struct onlineusers *user;
+	struct msg *m;
+	user = getUser(uid);
+	m = list_entry(user->lmsg.next, struct msg, list);
+	printf("msg::::%s", m->buf);
+	memcpy(ret, m->buf, BUFSIZE);
+	list_del(&m->list);
+	if (list_empty(&user->lmsg)) {
+		user->flag = 0;
+	}
+	pthread_mutex_unlock(&lock);
+	return ret;
+}
+
 //For python call
 int init()
 {
@@ -230,7 +299,7 @@ int login(char *uid)
 		perror("send");
 		return 1;
 	}
-	heartbeat_cli(1, 3);
+	//heartbeat_cli(1, 3);
 	FD_ZERO(&orfds);
 	//FD_SET(STDIN_FILENO, &orfds);
 	FD_SET(socksrv, &orfds);
@@ -244,13 +313,31 @@ int sign_in(char *uid, char *password)
 
 char *getUsers()
 {
-	return pyUser;
+	struct onlineusers *pos, *n;
+	char tmp[11];
+	char *p;
+	//no one online
+	if (list_empty(&ulist)) {
+		return NULL;
+	}
+	memset(ret, 0, sizeof ret);
+	p = ret;
+	list_for_each_entry_safe(pos, n, &ulist, list)
+	{
+		sprintf(tmp, "%s:", pos->uid);
+		memcpy(p, tmp, 10);
+		p += strlen(tmp);
+	}
+	*(p-1) = '\0';
+	//printf("%s\n", ret);
+	return ret;
 }
 
 void main_loop()
 {
 	char buf[BUFSIZE], bufmsg[BUFSIZE];
 	int bytes;
+	struct onlineusers *pUser;
 	for(;;)
 	{
 		rfds = orfds;
@@ -268,17 +355,24 @@ void main_loop()
 				perror("recv");
 			}
 			if (HEART == buf[0]) {
-				getUser(&buf[1]);
+				//getUser(&buf[1]);
 			}
 			else if (MESSAGE == buf[0]) {
-				//memcpy(uid, &buf[1], sizeof uid);
-				//pTmp = &buf[21];
+				memset(bufmsg, 0, sizeof bufmsg);
 				sprintf(bufmsg, "%s %s\n%s\n", &buf[11], &buf[1], &buf[21]);
-				//printf("pos %d\n", getPos(&buf[1]));
-				printf("recv\n");
-				int pos = getPos(&buf[1]);
-				//memcpy(user[pos].pMsg, bufmsg, BUFSIZE);
-				//user[pos].flag = 1;
+				addMsg(&buf[1], bufmsg);
+				//printf("recv:%s\n", bufmsg);
+				//printf("get %s\n", getMsg(&buf[1]));
+				printf("finish recv\n");
+			}
+			else if (LOGIN == buf[0]) {
+				initUsers(&buf[1]);
+			}
+			else if (ONLINE == buf[0]) {
+				addUser(&buf[1]);
+			}
+			else if (OFFLINE == buf[0]) {
+				delUser(&buf[1]);
 			}
 			nprobes = 0;
 		}
@@ -287,7 +381,6 @@ void main_loop()
 
 int sendMSG(char *receiver, char *msg)
 {
-	printf("start send\n");
 	int bytes;
 	char buf[BUFSIZE];
 	bytes = strlen(msg);
