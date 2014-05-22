@@ -138,6 +138,18 @@ int main(int argc, const char *argv[])
 	return 0;
 }
 
+int isOnline(char *uid)
+{
+	struct user *pos;
+	list_for_each_entry(pos, &ulist, list)
+	{
+		if (!strcmp(pos->uid, uid)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 
 int send_reply(struct sockfd_opt *p_so)
 {
@@ -198,37 +210,43 @@ int send_reply(struct sockfd_opt *p_so)
 
 	else if (LOGIN == buf[0]) {
 		p = &buf[1];
-		buf[result] = '\0';
-		printf("%s login\n", p);
 
-
-		//add to user list
-		struct user *pTmp = (struct user*)malloc(sizeof(struct user));
-		pTmp->uid = strdup(p);
-		pTmp->ip = strdup(ip); 
-		pTmp->port = port;
-		pTmp->fd = p_so->fd;
-		if (!list_empty(&ulist)) {
-			char tmp[11];
-			char users[11];
-			p = &buf[1];
-			users[0] = ONLINE;
-			memset(&buf[1], 0, sizeof(buf)-1);
-			list_for_each_entry(pos, &ulist, list)
-			{
-				memcpy(&users[1], pTmp->uid, 10);
-				send(pos->fd, users, 11, 0);
-				sprintf(tmp, "%s:", pos->uid);
-				memcpy(p, tmp, 10);
-				p += strlen(tmp);
-			}
-			pos = NULL;
-			*(p-1) = '\0';
-			send(pTmp->fd, buf, sizeof buf, 0);
+		if (isOnline(p)) {
+			memset(buf, 0, sizeof buf);
+			buf[0] = UID_EXIST;
+			send(p_so->fd, &buf[0], 1, 0);
 		}
-		list_add_tail(&pTmp->list, &ulist);
+		else {
+			printf("%s login\n", p);
+			//add to user list
+			struct user *pTmp = (struct user*)malloc(sizeof(struct user));
+			pTmp->uid = strdup(p);
+			pTmp->ip = strdup(ip); 
+			pTmp->port = port;
+			pTmp->fd = p_so->fd;
+			if (!list_empty(&ulist)) {
+				char tmp[11];
+				char users[11];
+				p = &buf[1];
+				users[0] = ONLINE;
+				memset(&buf[1], 0, sizeof(buf)-1);
+				list_for_each_entry(pos, &ulist, list)
+				{
+					memcpy(&users[1], pTmp->uid, 10);
+					send(pos->fd, users, 11, 0);
+					sprintf(tmp, "%s:", pos->uid);
+					memcpy(p, tmp, 10);
+					p += strlen(tmp);
+				}
+				pos = NULL;
+				*(p-1) = '\0';
+				send(pTmp->fd, buf, sizeof buf, 0);
+			}
+			list_add_tail(&pTmp->list, &ulist);
 
-		nCurrentUser++;
+			nCurrentUser++;
+		}
+
 	}
 
 	else if (MESSAGE == buf[0]) {

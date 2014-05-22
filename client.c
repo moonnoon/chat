@@ -199,16 +199,25 @@ int delUser(char *uid)
 	printf("del......%s\n", uid);
 	pthread_mutex_lock(&lock);
 	struct onlineusers *pos, *n;
+	struct msg *p, *m;
 	list_for_each_entry_safe(pos, n, &ulist, list)
 	{
 		if(!strcmp(pos->uid, uid)) {
 			list_del(&pos->list);
-			free(pos);
 			break;
 		}
 	}
+	if (pos->flag) {
+		list_for_each_entry_safe(p, m, &pos->lmsg, list)
+		{
+			list_del(&p->list);
+			free(p);
+		}
+	}
+	free(pos);
 	//printf("segmentation fault\n");
 	pthread_mutex_unlock(&lock);
+	printf("what falut????\n");
 	return 0;
 }
 
@@ -253,11 +262,33 @@ char *getMsg(char *uid)
 	struct msg *m;
 	user = getUser(uid);
 	m = list_entry(user->lmsg.next, struct msg, list);
-	printf("msg::::%s", m->buf);
 	memcpy(ret, m->buf, BUFSIZE);
 	list_del(&m->list);
+	free(m);
 	if (list_empty(&user->lmsg)) {
 		user->flag = 0;
+	}
+	pthread_mutex_unlock(&lock);
+	return ret;
+}
+
+//return users who send current user
+char *remind()
+{
+	pthread_mutex_lock(&lock);
+	char *p;
+	char tmp[11];
+	struct onlineusers *pos, *n;
+	memset(ret, 0, sizeof ret);
+	p = ret;
+	list_for_each_entry_safe(pos, n, &ulist, list)
+	{
+		if(pos->flag)
+		{
+			sprintf(tmp, "%s:", pos->uid);
+			memcpy(p, tmp, 10);
+			p += strlen(tmp);
+		}
 	}
 	pthread_mutex_unlock(&lock);
 	return ret;
@@ -282,8 +313,6 @@ int init()
 		perror("connect");
 		return 1;
 	}
-
-	printf("finished\n");
 	return 0;
 }
 
@@ -297,8 +326,9 @@ int login(char *uid)
 	bytes = send(socksrv, buf, sizeof buf, 0);
 	if (bytes < 0) {
 		perror("send");
-		return 1;
+		return -1;
 	}
+
 	//heartbeat_cli(1, 3);
 	FD_ZERO(&orfds);
 	//FD_SET(STDIN_FILENO, &orfds);
@@ -368,6 +398,8 @@ void main_loop()
 			else if (LOGIN == buf[0]) {
 				initUsers(&buf[1]);
 			}
+			else if(UID_EXIST == buf[0]){
+			}
 			else if (ONLINE == buf[0]) {
 				addUser(&buf[1]);
 			}
@@ -381,6 +413,7 @@ void main_loop()
 
 int sendMSG(char *receiver, char *msg)
 {
+	printf("%s\n", msg);
 	int bytes;
 	char buf[BUFSIZE];
 	bytes = strlen(msg);
@@ -396,10 +429,7 @@ int sendMSG(char *receiver, char *msg)
 	return 0;
 }
 
-char *haveMSG()
+void clean()
 {
-}
-
-char *getMSG(char *uid)
-{
+	close(socksrv);
 }

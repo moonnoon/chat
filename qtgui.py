@@ -6,6 +6,7 @@ from ctypes import *
 import threading
 import time
 import sys
+import re
 from clientlib import *
 
 class MainWindow(QtGui.QWidget, threading.Thread):
@@ -65,9 +66,15 @@ class MainWindow(QtGui.QWidget, threading.Thread):
 			self.table.clearContents()
 			if users:
 				userlist = users.split(':')
+				t = lib.remind
+				t.restype = c_char_p
+				users = lib.remind()
 				i = 0
 				for value in userlist:
 					newItem = QtGui.QTableWidgetItem(value)
+					if value in users:
+						newItem.setBackgroundColor(QtGui.QColor(0, 255, 0))
+						#newItem.setTextColor(QtGui.QColor(0, 255, 0))
 					self.table.setItem(i, 0, newItem)
 					i = i+1
 			time.sleep(1)
@@ -111,17 +118,16 @@ class chat(QtGui.QDialog, threading.Thread):
 		self.start()
 
 	def Send(self):
-		lib.sendMSG(str(self.uid) , str(self.inText.toPlainText()))
+		lib.sendMSG(str(self.uid) , unicode(self.inText.toPlainText()))
+		#print unicode(self.inText.toPlainText())
 		self.inText.setText("")
 	def Close(self):
-		print 'Close'
 		self.exit()
 		self.destroy()
 	def run(self):
 		while self.flag:
 			i = lib.haveMsg(str(self.uid))
 			if i == 1:
-				print '.........get'
 				t = lib.getMsg
 				t.restype = c_char_p
 				msg = lib.getMsg(str(self.uid))
@@ -207,10 +213,20 @@ class LoginDialog(QtGui.QDialog):
 	def login(self):
 		print 'login'
 		uid = str(self.leName.text())
-		lib.login(uid)
-		tl = loop()
-		tl.start()
-		self.accept()
+		pattern = re.compile(r'^[a-zA-Z0-9]+$')
+		match = pattern.match(uid)
+		if not match:
+			QtGui.QMessageBox.critical(self, u'错误', u'错误的用户名，请使用数字和字母组合')
+			self.leName.setText('')
+			return
+		i = lib.login(uid)
+		if i != 1:
+			tl = loop()
+			tl.start()
+			self.accept()
+		else:
+			QtGui.QMessageBox.critical(self, u'错误', u'用户已在线')
+			self.leName.setText('')
 #		if self.leName.text() == '' and self.lePassword.text() == '':
 #			self.accept()
 #		else:
@@ -252,3 +268,4 @@ if __name__ == '__main__':
 		mainWindow = MainWindow()
 		mainWindow.show()
 		sys.exit(app.exec_())
+		lib.clean()

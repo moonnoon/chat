@@ -23,7 +23,7 @@
 #define ERROR	'7'
 
 //Error types
-#define UID_EXIST	'1'
+#define UID_EXIST	'A'
 
 
 #define BUFSIZE 1024
