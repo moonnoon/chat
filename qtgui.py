@@ -118,7 +118,7 @@ class chat(QtGui.QDialog, threading.Thread):
 		self.start()
 
 	def Send(self):
-		lib.sendMSG(str(self.uid) , unicode(self.inText.toPlainText()))
+		lib.sendMSG(str(self.uid) , str(self.inText.toPlainText()))
 		#print unicode(self.inText.toPlainText())
 		self.inText.setText("")
 	def Close(self):

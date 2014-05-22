@@ -391,14 +391,12 @@ void main_loop()
 				memset(bufmsg, 0, sizeof bufmsg);
 				sprintf(bufmsg, "%s %s\n%s\n", &buf[11], &buf[1], &buf[21]);
 				addMsg(&buf[1], bufmsg);
-				//printf("recv:%s\n", bufmsg);
+				printf("recv:%s\n", bufmsg);
 				//printf("get %s\n", getMsg(&buf[1]));
 				printf("finish recv\n");
 			}
 			else if (LOGIN == buf[0]) {
 				initUsers(&buf[1]);
-			}
-			else if(UID_EXIST == buf[0]){
 			}
 			else if (ONLINE == buf[0]) {
 				addUser(&buf[1]);
